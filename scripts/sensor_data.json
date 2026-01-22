@@ -1,0 +1,68 @@
+[
+    {
+        "zone_id": "ZONE_A",
+        "zone_size_m": 100,
+        "latitude": 31.102,
+        "longitude": 77.171,
+        "risk": "HIGH",
+        "probability": 0.84,
+        "lead_time_hours": 6,
+        "last_updated": "2026-01-23T02:23:26.004708",
+        "sender_ip": "169.254.234.1"
+    },
+    {
+        "zone_id": "ZONE_B",
+        "zone_size_m": 100,
+        "latitude": 31.111,
+        "longitude": 77.181,
+        "risk": "HIGH",
+        "probability": 0.93,
+        "lead_time_hours": 6,
+        "last_updated": "2026-01-23T02:23:26.008332",
+        "sender_ip": "169.254.234.1"
+    },
+    {
+        "zone_id": "ZONE_C",
+        "zone_size_m": 100,
+        "latitude": 31.121,
+        "longitude": 77.191,
+        "risk": "MODERATE",
+        "probability": 0.58,
+        "lead_time_hours": 6,
+        "last_updated": "2026-01-23T02:23:26.011651",
+        "sender_ip": "169.254.234.1"
+    },
+    {
+        "zone_id": "ZONE_D",
+        "zone_size_m": 100,
+        "latitude": 31.131,
+        "longitude": 77.201,
+        "risk": "HIGH",
+        "probability": 0.88,
+        "lead_time_hours": 6,
+        "last_updated": "2026-01-23T02:23:26.023627",
+        "sender_ip": "169.254.234.1"
+    },
+    {
+        "zone_id": "ZONE_E",
+        "zone_size_m": 100,
+        "latitude": 31.474333,
+        "longitude": 77.211,
+        "risk": "HIGH",
+        "probability": 0.8,
+        "lead_time_hours": 6,
+        "last_updated": "2026-01-23T02:23:26.104109",
+        "sender_ip": "169.254.234.1"
+    },
+    {
+        "zone_id": "ZONE_F",
+        "zone_size_m": 100,
+        "latitude": 31.151,
+        "longitude": 77.221,
+        "risk": "MODERATE",
+        "probability": 0.58,
+        "lead_time_hours": 6,
+        "last_updated": "2026-01-23T02:23:26.107563",
+        "sender_ip": "169.254.234.1"
+    }
+]

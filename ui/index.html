@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Sentinel-LEWS Offline Dashboard</title>
+  <title>LandSense - Offline Dashboard</title>
 
   <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
   <link rel="stylesheet" href="./style.css" />
 </head>
+
 <body>
 <header class="topbar">
   <div>
-    <div class="title">Sentinel-LEWS (Offline)</div>
+    <div class="title">LandSense-LEWS (Offline)</div>
     <div class="subtitle">Hyper-local Landslide Early Warning</div>
   </div>
 
@@ -21,7 +22,6 @@
 
     <button id="btnRefresh" class="btn">Refresh</button>
     <button id="btnVsat" class="btn secondary">VSAT: OFF</button>
-    <button id="btnCopySms" class="btn secondary">Copy SMS</button>
     <button id="btnAck" class="btn danger">ACK ALERT</button>
     <button id="btnMute" class="btn secondary">Mute</button>
     <button id="btnReport" class="btn">Download Report</button>
@@ -30,128 +30,22 @@
 
 <main class="layout">
 
-  <!-- BIG DECISION BANNER -->
-  <section id="decisionBanner" class="banner neutral">
-    <div class="bannerLeft">
-      <div class="bannerLabel">District Decision</div>
-      <div class="bannerDistrict" id="districtName">—</div>
-      <div class="bannerSummary" id="summaryText">Waiting for model output…</div>
-
-      <div class="chips" id="chipRow"></div>
-    </div>
-
-    <div class="bannerRight">
-      <div class="decisionBox">
-        <div class="decisionTitle">AT RISK?</div>
-        <div id="decisionText" class="decisionValue">—</div>
-        <div class="decisionMeta">
-          Confidence: <b id="confidenceText">—</b><br/>
-          Lead Time: <b id="leadTimeText">—</b><br/>
-          Status: <b id="ackText">NOT ACKED</b><br/>
-          Playback: <b id="playbackText">LIVE</b>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- MAIN GRID -->
-  <section class="grid">
-
-    <!-- LEFT PANEL -->
-    <aside class="panel">
-
-      <div class="card">
-        <div class="cardTitle">System Metrics</div>
-
-        <div class="metrics">
-          <div class="metric">
-            <div class="metricLabel">Last Update</div>
-            <div id="lastUpdate" class="metricValue">—</div>
-          </div>
-
-          <div class="metric">
-            <div class="metricLabel">Mode</div>
-            <div id="modeText" class="metricValue">LOCAL JSON</div>
-          </div>
-
-          <div class="metric">
-            <div class="metricLabel">Sync Payload</div>
-            <div id="syncBytes" class="metricValue small">—</div>
-          </div>
-
-          <div class="metric">
-            <div class="metricLabel">Alarm</div>
-            <div id="alarmText" class="metricValue small">—</div>
-          </div>
-        </div>
-
-        <div class="hint">
-          VSAT mode slows refresh + shows minimal sync payload bytes.
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="cardTitle">SMS Alert Preview (160 chars)</div>
-        <textarea id="smsText" readonly></textarea>
-        <div class="smsMeta"><span id="smsCount">0</span>/160</div>
-      </div>
-
-      <div class="card">
-        <div class="cardTitle">
-          Decision Timeline (Last 6h)
-          <span class="tinyHint">(Click a point = Playback)</span>
-        </div>
-
-        <div class="timelineControls">
-          <button id="btnLive" class="btn small secondary">Live</button>
-          <button id="btnAuto" class="btn small">Autoplay</button>
-        </div>
-
-        <canvas id="timelineChart" width="330" height="120"></canvas>
-        <div id="timelineList" class="timelineList"></div>
-      </div>
-
-      <div class="card">
-        <div class="cardTitle">Evacuation Zones</div>
-        <div id="zoneList" class="zones">
-          <div class="muted">Waiting for zones…</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="cardTitle">Decision Factors</div>
-        <div id="factorList" class="factors">
-          <div class="muted">Waiting for factors…</div>
-        </div>
-      </div>
-    </aside>
-
+  <!-- TOP GRID -->
+  <section class="gridTop">
     <!-- MAP -->
     <section class="card mapCard">
-      <div class="cardTitle">Operational Grid Map (30m × 30m)</div>
+      <div class="cardTitle">Operational Map (Zones Live)</div>
       <div id="map"></div>
-      <div class="mapNote">
-        Base map caches after 1 online load. Grid overlay always renders offline.
+      <div class="hint">
+        Zones update automatically from <b>scripts/sensor_data.json</b>. Hover a zone for details.
       </div>
     </section>
 
-    <!-- OPS CARD -->
+    <!-- OPS / HEALTH -->
     <section class="card opsCard">
       <div class="cardTitle">Field Readiness Console</div>
 
       <div class="opsGrid">
-        <div class="opsTile">
-          <div class="opsLabel">SMS Compliance</div>
-          <div id="opsSms" class="opsValue">—</div>
-          <div class="opsSub">must be ≤160 chars</div>
-        </div>
-
-        <div class="opsTile">
-          <div class="opsLabel">VSAT Transmit Time</div>
-          <div id="opsVsatTime" class="opsValue">—</div>
-          <div class="opsSub">@ 256 kbps</div>
-        </div>
-
         <div class="opsTile">
           <div class="opsLabel">Cached Tiles</div>
           <div id="opsTiles" class="opsValue">—</div>
@@ -159,55 +53,66 @@
         </div>
 
         <div class="opsTile">
-          <div class="opsLabel">Playback / Override</div>
-          <div id="opsOverride" class="opsValue">LIVE</div>
-          <div class="opsSub">demo controls</div>
+          <div class="opsLabel">Feed Health</div>
+          <div id="feedHealth" class="opsValue">—</div>
+          <div class="opsSub">auto update loop</div>
+        </div>
+
+        <div class="opsTile">
+          <div class="opsLabel">Last Update</div>
+          <div id="lastUpdate" class="opsValue">—</div>
+          <div class="opsSub">from sensor feed</div>
+        </div>
+
+        <div class="opsTile">
+          <div class="opsLabel">Alarm</div>
+          <div id="alarmText" class="opsValue">—</div>
+          <div class="opsSub">HIGH zones trigger alarm</div>
         </div>
       </div>
 
       <div class="opsControls">
         <button id="btnBlackout" class="btn secondary">Blackout: OFF</button>
-        <button id="btnSimYes" class="btn danger">Simulate YES</button>
-        <button id="btnSimNo" class="btn">Simulate NO</button>
         <button id="btnClearAck" class="btn secondary">Clear ACK</button>
       </div>
 
       <div class="hint">
-        Blackout forces cache-only behavior. Simulation affects UI only (backend not needed).
+        Blackout forces cache-only behavior (offline demo).
       </div>
     </section>
-
-    <!-- ✅ GRID TABLE -->
-    <section class="card tableCard">
-      <div class="cardTitle">Grid Cells (30m × 30m) — Risk Heat Table</div>
-
-      <table class="table">
-        <thead>
-        <tr>
-          <th>#</th>
-          <th>Grid No</th>
-          <th>Lat</th>
-          <th>Lon</th>
-          <th>Soil Sat (0–1)</th>
-          <th>Rain (mm)</th>
-          <th>Vibration (1–10)</th>
-          <th>Risk (0–1)</th>
-        </tr>
-        </thead>
-
-        <tbody id="gridBody">
-        <tr><td colspan="8" class="muted">Waiting for grid data…</td></tr>
-        </tbody>
-      </table>
-    </section>
-
-    <!-- LOG -->
-    <section class="card logCard">
-      <div class="cardTitle">Event Log</div>
-      <div id="log" class="log"></div>
-    </section>
-
   </section>
+
+  <!-- LIVE ZONE TABLE -->
+  <section class="card">
+    <div class="cardTitle">Live Zone Feed</div>
+
+    <table class="table">
+      <thead>
+      <tr>
+        <th>Zone ID</th>
+        <th>Risk</th>
+        <th>Probability</th>
+        <th>Lead Time</th>
+        <th>Lat</th>
+        <th>Lon</th>
+        <th>Size (m)</th>
+        <th>Last Updated</th>
+        <th>Sender IP</th>
+      </tr>
+      </thead>
+
+      <tbody id="zoneBody">
+      <tr><td colspan="9" class="muted">Waiting for zone data…</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- EVENT LOG -->
+  <section class="card logCard">
+    <div class="cardTitle">Event Log</div>
+    <div id="log" class="log"></div>
+  </section>
+
 </main>
 
 <script src="./vendor/leaflet/leaflet.js"></script>
