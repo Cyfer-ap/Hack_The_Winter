@@ -1,554 +1,312 @@
-// ---------- CONFIG ----------
-const DATA_URL = "./data.json";
+// ======================
+// CONFIG
+// ======================
+const DATA_URL = "./sensor_data.json";
 
-// refresh rates
-const POLL_NORMAL_MS = 6000;
-const POLL_VSAT_MS = 20000;
 
-// OSM tiles
+const POLL_NORMAL_MS = 5000;
+const POLL_VSAT_MS   = 20000;
+
 const OSM_TILES = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 
-// local storage keys
-const KEY_PAYLOAD = "lews_payload";
-const KEY_ACK_AT = "lews_ack_at";
-const KEY_MUTED = "lews_muted";
-const KEY_VSAT = "lews_vsat";
-const KEY_BLACKOUT = "lews_blackout";
-const KEY_SIM_DECISION = "lews_sim_decision"; // "YES"/"NO"/null
+const KEY_CACHE_ZONES = "lews_zones_cache";
+const KEY_ACK_AT      = "lews_ack_at";
+const KEY_MUTED       = "lews_muted";
+const KEY_VSAT        = "lews_vsat";
+const KEY_BLACKOUT    = "lews_blackout";
 
-// cache names from service worker
 const TILE_CACHE_NAME = "lews-tiles-v1";
 
-// ---------- STATE ----------
-let map, baseTileLayer;
-let gridLayer;
-
-let lastPayload = null;
-
+// ======================
+// STATE
+// ======================
+let map, zonesLayer;
+let lastZones = null;
 let pollTimer = null;
 let alarmInterval = null;
+let lastGoodFetchAt = null;
 
-let playback = { enabled: false, t: null, decision: null, confidence: null };
-let autoplayTimer = null;
-let autoplayIdx = 0;
+// ======================
+// HELPERS
+// ======================
+const $ = (id) => document.getElementById(id);
 
-// ---------- HELPERS ----------
-function log(msg) {
-  const el = document.getElementById("log");
+function log(msg, ok = true) {
+  const el = $("log");
+  if (!el) return;
   const ts = new Date().toLocaleTimeString();
-  el.innerHTML = `[${ts}] ${msg}\n` + el.innerHTML;
+  const icon = ok ? "✅" : "❌";
+  el.innerHTML = `[${ts}] ${msg} ${icon}\n` + el.innerHTML;
 }
 
 function setConn(ok, labelOverride = null) {
-  const dot = document.getElementById("connDot");
-  const text = document.getElementById("connText");
+  const dot = $("connDot");
+  const text = $("connText");
+  if (!dot || !text) return;
+
   dot.className = "dot " + (ok ? "green" : "red");
-  text.textContent = labelOverride || (ok ? "LOCAL DATA OK" : "OFFLINE (CACHE)");
+  text.textContent = labelOverride || (ok ? "LIVE FEED OK" : "OFFLINE (CACHE)");
 }
 
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
-function isYES(x) { return String(x || "NO").toUpperCase() === "YES"; }
 
+function riskToColor(riskText, prob = null) {
+  const r = String(riskText || "").toUpperCase();
+  if (r === "HIGH") return "#ff4d4f";
+  if (r === "MODERATE" || r === "MEDIUM") return "#ffb020";
+  if (r === "LOW") return "#26d07c";
+
+  const p = clamp(Number(prob ?? 0), 0, 1);
+  if (p >= 0.7) return "#ff4d4f";
+  if (p >= 0.35) return "#ffb020";
+  return "#26d07c";
+}
+
+function formatISO(iso) {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso || "-");
+    return d.toLocaleString();
+  } catch {
+    return String(iso || "-");
+  }
+}
+
+// ======================
+// SETTINGS
+// ======================
 function getMuted() { return localStorage.getItem(KEY_MUTED) === "1"; }
 function setMuted(v) { localStorage.setItem(KEY_MUTED, v ? "1" : "0"); updateAlarmText(); }
 
 function getAckAt() { return localStorage.getItem(KEY_ACK_AT); }
-function setAckNow() {
-  localStorage.setItem(KEY_ACK_AT, new Date().toISOString());
-  updateAckText();
-}
-function clearAck() {
-  localStorage.removeItem(KEY_ACK_AT);
-  updateAckText();
-}
+function setAckNow() { localStorage.setItem(KEY_ACK_AT, new Date().toISOString()); updateAckText(); }
+function clearAck() { localStorage.removeItem(KEY_ACK_AT); updateAckText(); }
 
 function getVSAT() { return localStorage.getItem(KEY_VSAT) === "1"; }
 function setVSAT(v) { localStorage.setItem(KEY_VSAT, v ? "1" : "0"); updateVSATButton(); restartPolling(); }
 
 function getBlackout() { return localStorage.getItem(KEY_BLACKOUT) === "1"; }
-function setBlackout(v) {
-  localStorage.setItem(KEY_BLACKOUT, v ? "1" : "0");
-  updateBlackoutButton();
-}
+function setBlackout(v) { localStorage.setItem(KEY_BLACKOUT, v ? "1" : "0"); updateBlackoutButton(); }
 
-function getSimDecision() {
-  const v = localStorage.getItem(KEY_SIM_DECISION);
-  if (!v) return null;
-  return String(v).toUpperCase();
-}
-function setSimDecision(v) {
-  if (!v) localStorage.removeItem(KEY_SIM_DECISION);
-  else localStorage.setItem(KEY_SIM_DECISION, String(v).toUpperCase());
-  updateOpsOverrideText();
-}
-
-// ---------- SERVICE WORKER ----------
+// ======================
+// SERVICE WORKER
+// ======================
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) {
-    log("Service Worker not supported");
+    log("Service Worker not supported", false);
     return;
   }
   try {
     await navigator.serviceWorker.register("./sw.js");
-    log("Service Worker registered ✅");
+    log("Service Worker registered");
   } catch {
-    log("Service Worker registration failed ❌");
+    log("Service Worker registration failed", false);
   }
 }
 
-// ---------- MAP ----------
-function addBaseTiles() {
-  baseTileLayer = L.tileLayer(OSM_TILES, {
+// ======================
+// MAP
+// ======================
+function initMap() {
+  map = L.map("map", { zoomControl: true }).setView([31.1045, 77.1740], 15);
+  const tileLayer = L.tileLayer(OSM_TILES, {
     maxZoom: 18,
     crossOrigin: true,
     attribution: "&copy; OpenStreetMap contributors"
   });
 
-  baseTileLayer.on("tileerror", () => {
-    if (!window.__tileErrorLogged) {
-      window.__tileErrorLogged = true;
-      log("Map tiles failed to load (offline/blocked). Grid overlay still works ✅");
-    }
+  tileLayer.on("tileerror", () => {
+    // Tiles might fail offline, but zones still show
   });
 
-  baseTileLayer.addTo(map);
+  tileLayer.addTo(map);
+  zonesLayer = L.layerGroup().addTo(map);
 }
 
-function initLegend() {
-  const legend = L.control({ position: "bottomright" });
-  legend.onAdd = function () {
-    const div = L.DomUtil.create("div", "leaflet-control");
-    div.style.background = "rgba(14,23,48,0.92)";
-    div.style.border = "1px solid #223152";
-    div.style.color = "#cfe0ff";
-    div.style.padding = "10px";
-    div.style.borderRadius = "12px";
-    div.style.fontSize = "12px";
-    div.style.fontWeight = "800";
-    div.innerHTML = `
-      <div style="margin-bottom:6px">Grid Risk Legend</div>
-      <div style="display:flex;gap:8px;align-items:center;margin:4px 0;">
-        <span style="width:14px;height:14px;background:#26d07c;border-radius:4px;display:inline-block"></span> LOW (0.00–0.35)
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;margin:4px 0;">
-        <span style="width:14px;height:14px;background:#ffb020;border-radius:4px;display:inline-block"></span> MED (0.35–0.70)
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;margin:4px 0;">
-        <span style="width:14px;height:14px;background:#ff4d4f;border-radius:4px;display:inline-block"></span> HIGH (0.70–1.00)
-      </div>
-    `;
-    return div;
-  };
-  legend.addTo(map);
-}
-
-function initMap() {
-  map = L.map("map", { zoomControl: true }).setView([31.10, 77.17], 16);
-  addBaseTiles();
-
-  gridLayer = L.layerGroup().addTo(map);
-
-  initLegend();
-}
-
-function riskColor(risk) {
-  const r = clamp(Number(risk ?? 0), 0, 1);
-  if (r >= 0.70) return "#ff4d4f";
-  if (r >= 0.35) return "#ffb020";
-  return "#26d07c";
-}
-
-function riskRowClass(risk) {
-  const r = clamp(Number(risk ?? 0), 0, 1);
-  if (r >= 0.70) return "rowHigh";
-  if (r >= 0.35) return "rowMed";
-  return "rowLow";
-}
-
-// Convert 30m cell to lat/lon degrees around a given latitude
-function makeCellBounds(lat, lon, cellSizeM = 30) {
-  const half = cellSizeM / 2;
-
-  // 1 degree lat ≈ 111,320m
-  const dLat = half / 111320;
-
-  // 1 degree lon ≈ 111,320m * cos(latitude)
-  const latRad = (lat * Math.PI) / 180;
-  const dLon = half / (111320 * Math.cos(latRad));
-
-  return [
-    [lat - dLat, lon - dLon],
-    [lat + dLat, lon + dLon]
-  ];
-}
-
-function makeTooltipHTML(cell) {
-  const col = riskColor(cell.risk);
+function makeZoneTooltipHTML(z) {
+  const col = riskToColor(z.risk, z.probability);
   return `
     <div>
-      <div style="margin-bottom:6px">
-        <b>Grid ${cell.grid_no || "-"}</b>
+      <div style="margin-bottom:6px"><b>${z.zone_id || "ZONE"}</b></div>
+      <div>Risk: <b style="color:${col}">${String(z.risk || "-").toUpperCase()}</b></div>
+      <div>Probability: <b>${Number(z.probability ?? 0).toFixed(2)}</b></div>
+      <div>Lead time: <b>${z.lead_time_hours ?? "-"} hours</b></div>
+      <div>Zone size: <b>${z.zone_size_m ?? "-"} m</b></div>
+      <div style="margin-top:8px;color:#93a4c7">
+        Lat/Lon: ${z.latitude}, ${z.longitude}
       </div>
-      <div>Risk: <b style="color:${col}">${Number(cell.risk ?? 0).toFixed(2)}</b></div>
-      <div>Soil saturation: <b>${Number(cell.soil_saturation ?? 0).toFixed(2)}</b></div>
-      <div>Rainfall: <b>${Number(cell.rainfall_mm ?? 0).toFixed(1)} mm</b></div>
-      <div>Vibration: <b>${Number(cell.vibration ?? 0)} / 10</b></div>
       <div style="margin-top:6px;color:#93a4c7">
-        ${cell.lat}, ${cell.lon}
+        Updated: ${formatISO(z.last_updated)}
+      </div>
+      <div style="margin-top:6px;color:#93a4c7">
+        Sender: ${z.sender_ip || "-"}
       </div>
     </div>
   `;
 }
 
-function updateGridOnMap(gridCells) {
-  gridLayer.clearLayers();
+function updateZonesOnMap(zones) {
+  if (!zonesLayer) return;
 
-  (gridCells || []).forEach(cell => {
-    if (cell.lat == null || cell.lon == null) return;
+  zonesLayer.clearLayers();
+  if (!zones || !zones.length) return;
 
-    const col = riskColor(cell.risk);
-    const bounds = makeCellBounds(cell.lat, cell.lon, 30);
+  // focus = highest probability/highest risk
+  let focus = zones[0];
 
-    const rect = L.rectangle(bounds, {
+  zones.forEach(z => {
+    if (z.latitude == null || z.longitude == null) return;
+
+    const col = riskToColor(z.risk, z.probability);
+    const radiusM = Number(z.zone_size_m ?? 100);
+
+    const circle = L.circle([z.latitude, z.longitude], {
+      radius: radiusM,
       color: col,
-      weight: 1,
       fillColor: col,
-      fillOpacity: 0.45
+      weight: 2,
+      fillOpacity: 0.35
     });
 
-    // ✅ HOVER POPUP (no click)
-    rect.bindTooltip(makeTooltipHTML(cell), {
+    // ✅ hover tooltip (no click)
+    circle.bindTooltip(makeZoneTooltipHTML(z), {
       sticky: true,
       direction: "top",
       opacity: 0.98,
-      className: "gridTip"
+      className: "zoneTip"
     });
 
-    rect.on("mouseover", () => rect.setStyle({ weight: 2, fillOpacity: 0.72 }));
-    rect.on("mouseout", () => rect.setStyle({ weight: 1, fillOpacity: 0.45 }));
+    circle.on("mouseover", () => circle.setStyle({ weight: 3, fillOpacity: 0.60 }));
+    circle.on("mouseout", () => circle.setStyle({ weight: 2, fillOpacity: 0.35 }));
 
-    // Optional: focus map when clicked
-    rect.on("click", () => {
-      map.setView([cell.lat, cell.lon], 18);
-    });
+    circle.addTo(zonesLayer);
 
-    rect.addTo(gridLayer);
+    // choose focus (HIGH risk wins, else higher probability)
+    const zr = String(z.risk || "").toUpperCase();
+    const fr = String(focus.risk || "").toUpperCase();
+    if (zr === "HIGH" && fr !== "HIGH") focus = z;
+    else if (zr === fr && Number(z.probability ?? 0) > Number(focus.probability ?? 0)) focus = z;
   });
-}
 
-// ---------- UI ----------
-function setBannerDecision(payload, decisionOverride = null, confOverride = null) {
-  const banner = document.getElementById("decisionBanner");
-  const decisionText = document.getElementById("decisionText");
-  const confText = document.getElementById("confidenceText");
-  const leadText = document.getElementById("leadTimeText");
-  const districtName = document.getElementById("districtName");
-  const summaryText = document.getElementById("summaryText");
-
-  const district = payload.district || "—";
-  const decision = String(decisionOverride ?? payload.decision ?? "NO").toUpperCase();
-  const confidence = Number(confOverride ?? payload.confidence ?? 0);
-  const lead = payload.lead_time_hours ?? 6;
-
-  districtName.textContent = district;
-  summaryText.textContent = payload.summary || "—";
-
-  banner.classList.remove("yes", "no", "neutral");
-  decisionText.classList.remove("yes", "no");
-
-  if (decision === "YES") {
-    banner.classList.add("yes");
-    decisionText.classList.add("yes");
-  } else {
-    banner.classList.add("no");
-    decisionText.classList.add("no");
+  if (!lastZones && focus.latitude != null && focus.longitude != null) {
+    map.setView([focus.latitude, focus.longitude], Math.max(map.getZoom(), 15));
   }
-
-  decisionText.textContent = decision;
-  confText.textContent = confidence.toFixed(2);
-  leadText.textContent = `${lead} hours`;
 }
 
-function setPlaybackText() {
-  const el = document.getElementById("playbackText");
-  if (!el) return;
+// ======================
+// UI TABLE
+// ======================
+function setZoneTable(zones) {
+  const body = $("zoneBody");
+  if (!body) return;
 
-  if (!playback.enabled) {
-    el.textContent = "LIVE";
-    el.style.color = "#c9ffe8";
-    return;
-  }
-
-  el.textContent = `PLAYBACK @ ${playback.t || "—"}`;
-  el.style.color = "#ffe7c2";
-}
-
-function setChips(payload) {
-  const row = document.getElementById("chipRow");
-  row.innerHTML = "";
-
-  (payload.factors || []).slice(0, 4).forEach(f => {
-    const level = String(f.level || "LOW").toUpperCase();
-    const chip = document.createElement("div");
-    chip.className = "chip " + (level === "HIGH" ? "high" : level === "MEDIUM" ? "medium" : "low");
-    chip.textContent = `${f.name}: ${f.value}`;
-    row.appendChild(chip);
-  });
-}
-
-function setFactors(payload) {
-  const list = document.getElementById("factorList");
-  list.innerHTML = "";
-
-  const factors = payload.factors || [];
-  if (!factors.length) {
-    list.innerHTML = `<div class="muted">No factor info available</div>`;
-    return;
-  }
-
-  factors.forEach(f => {
-    const level = String(f.level || "LOW").toUpperCase();
-    const badgeClass = level === "HIGH" ? "high" : level === "MEDIUM" ? "medium" : "low";
-
-    const row = document.createElement("div");
-    row.className = "factorRow";
-    row.innerHTML = `
-      <div class="factorLeft">
-        <div class="factorName">${f.name}</div>
-        <div class="factorValue">${f.value}</div>
-      </div>
-      <div class="badge ${badgeClass}">${level}</div>
-    `;
-    list.appendChild(row);
-  });
-}
-
-// ✅ GRID TABLE
-function setGridTable(payload) {
-  const body = document.getElementById("gridBody");
   body.innerHTML = "";
 
-  let grid = payload.grid_cells || [];
-  if (!grid.length) {
-    body.innerHTML = `<tr><td colspan="8" class="muted">No grid data returned</td></tr>`;
-    updateGridOnMap([]);
+  if (!zones || !zones.length) {
+    body.innerHTML = `<tr><td colspan="9" class="muted">No zones received</td></tr>`;
     return;
   }
 
-  grid = [...grid].sort((a,b) => Number(b.risk ?? 0) - Number(a.risk ?? 0));
+  zones.forEach(z => {
+    const risk = String(z.risk || "").toUpperCase();
+    const cls = risk === "HIGH" ? "rowHigh" : (risk === "MODERATE" || risk === "MEDIUM") ? "rowMed" : "rowLow";
 
-  grid.slice(0, 25).forEach((g, idx) => {
     const tr = document.createElement("tr");
-    tr.className = riskRowClass(g.risk);
+    tr.className = cls;
     tr.style.cursor = "pointer";
 
     tr.innerHTML = `
-      <td>${idx + 1}</td>
-      <td><b>${g.grid_no || "-"}</b></td>
-      <td>${g.lat ?? "—"}</td>
-      <td>${g.lon ?? "—"}</td>
-      <td>${Number(g.soil_saturation ?? 0).toFixed(2)}</td>
-      <td>${Number(g.rainfall_mm ?? 0).toFixed(1)}</td>
-      <td>${Number(g.vibration ?? 0)}</td>
-      <td><b>${Number(g.risk ?? 0).toFixed(2)}</b></td>
+      <td><b>${z.zone_id ?? "-"}</b></td>
+      <td><b>${risk}</b></td>
+      <td>${Number(z.probability ?? 0).toFixed(2)}</td>
+      <td>${z.lead_time_hours ?? "-"}</td>
+      <td>${z.latitude ?? "-"}</td>
+      <td>${z.longitude ?? "-"}</td>
+      <td>${z.zone_size_m ?? "-"}</td>
+      <td>${formatISO(z.last_updated)}</td>
+      <td>${z.sender_ip ?? "-"}</td>
     `;
 
     tr.addEventListener("click", () => {
-      if (g.lat != null && g.lon != null) map.setView([g.lat, g.lon], 18);
+      if (z.latitude != null && z.longitude != null) map.setView([z.latitude, z.longitude], 17);
     });
 
     body.appendChild(tr);
   });
-
-  updateGridOnMap(payload.grid_cells);
 }
 
-function setSMS(payload) {
-  const smsBox = document.getElementById("smsText");
-  const smsCount = document.getElementById("smsCount");
+// ======================
+// METRICS / OPS
+// ======================
+async function updateTileCacheCount() {
+  const el = $("opsTiles");
+  if (!el) return;
 
-  let sms = payload.sms || "";
-  sms = String(sms).slice(0, 160);
-
-  smsBox.value = sms;
-  smsCount.textContent = sms.length;
-}
-
-function setMetrics(payload) {
-  document.getElementById("lastUpdate").textContent =
-    payload.updated_at_local || new Date().toLocaleString();
-}
-
-// ---------- TIMELINE ----------
-function drawTimelineChart(history, activeT = null) {
-  const canvas = document.getElementById("timelineChart");
-  if (!canvas) return;
-
-  const ctx = canvas.getContext("2d");
-  const w = canvas.width;
-  const h = canvas.height;
-
-  ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#0e1730";
-  ctx.fillRect(0, 0, w, h);
-
-  ctx.strokeStyle = "#223152";
-  ctx.lineWidth = 1;
-  for (let i = 1; i <= 4; i++) {
-    const y = (h * i) / 5;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
-
-  if (!history || history.length < 2) return;
-
-  const pad = 10;
-  const innerH = h - pad * 2;
-  const innerW = w - pad * 2;
-  const n = history.length;
-  const xStep = innerW / (n - 1);
-
-  for (let i = 0; i < n - 1; i++) {
-    const a = history[i];
-    const b = history[i + 1];
-
-    const ya = pad + (1 - clamp(Number(a.confidence ?? 0), 0, 1)) * innerH;
-    const yb = pad + (1 - clamp(Number(b.confidence ?? 0), 0, 1)) * innerH;
-
-    const xa = pad + i * xStep;
-    const xb = pad + (i + 1) * xStep;
-
-    const dec = String(b.decision || "NO").toUpperCase();
-    ctx.strokeStyle = dec === "YES" ? "#ff4d4f" : "#26d07c";
-    ctx.lineWidth = 3;
-
-    ctx.beginPath();
-    ctx.moveTo(xa, ya);
-    ctx.lineTo(xb, yb);
-    ctx.stroke();
-  }
-
-  for (let i = 0; i < n; i++) {
-    const p = history[i];
-    const x = pad + i * xStep;
-    const y = pad + (1 - clamp(Number(p.confidence ?? 0), 0, 1)) * innerH;
-    const dec = String(p.decision || "NO").toUpperCase();
-
-    ctx.fillStyle = dec === "YES" ? "#ff4d4f" : "#26d07c";
-    ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (activeT && p.t === activeT) {
-      ctx.strokeStyle = "#cfe0ff";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(x, y, 7, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+  try {
+    const cache = await caches.open(TILE_CACHE_NAME);
+    const keys = await cache.keys();
+    el.textContent = `${keys.length}`;
+    el.style.color = keys.length > 0 ? "#c9ffe8" : "#ffe7c2";
+  } catch {
+    el.textContent = "—";
+    el.style.color = "#93a4c7";
   }
 }
 
-function setTimeline(payload) {
-  const history = payload.history || [];
-  drawTimelineChart(history, playback.enabled ? playback.t : null);
+function updateFeedHealth(ok) {
+  const el = $("feedHealth");
+  if (!el) return;
 
-  const list = document.getElementById("timelineList");
-  list.innerHTML = "";
+  if (ok) {
+    el.textContent = "LIVE";
+    el.style.color = "#c9ffe8";
+  } else {
+    el.textContent = "STALE";
+    el.style.color = "#ffd6d6";
+  }
+}
 
-  const tail = history.slice(-8);
-  tail.forEach(p => {
-    const dec = String(p.decision || "NO").toUpperCase();
-    const row = document.createElement("div");
-    row.className = `tRow ${dec === "YES" ? "tYes" : "tNo"} ${playback.enabled && playback.t === p.t ? "tActive" : ""}`;
-    row.innerHTML = `
-      <div class="tLeft">${p.t || "—"} → <b>${dec}</b></div>
-      <div class="tRight">conf ${Number(p.confidence ?? 0).toFixed(2)}</div>
-    `;
-    row.addEventListener("click", () => enterPlayback(p));
-    list.appendChild(row);
+function setLastUpdate(zones) {
+  const el = $("lastUpdate");
+  if (!el) return;
+
+  // pick newest timestamp inside data
+  let newest = null;
+  (zones || []).forEach(z => {
+    if (!z.last_updated) return;
+    if (!newest || String(z.last_updated) > String(newest)) newest = z.last_updated;
   });
+
+  el.textContent = newest ? formatISO(newest) : new Date().toLocaleString();
 }
 
-// ---------- PLAYBACK ----------
-function enterPlayback(point) {
-  playback.enabled = true;
-  playback.t = point.t || null;
-  playback.decision = String(point.decision || "NO").toUpperCase();
-  playback.confidence = Number(point.confidence ?? 0);
-
-  stopAlarm();
-  setPlaybackText();
-  updateOpsOverrideText();
-
-  if (lastPayload) {
-    applyPayload(lastPayload, `Playback ON @ ${playback.t}`);
-  }
-}
-
-function exitPlayback() {
-  playback.enabled = false;
-  playback.t = null;
-  playback.decision = null;
-  playback.confidence = null;
-
-  setPlaybackText();
-  updateOpsOverrideText();
-
-  if (lastPayload) {
-    applyPayload(lastPayload, "Returned to LIVE ✅");
-  }
-}
-
-function startAutoplay() {
-  if (!lastPayload || !(lastPayload.history || []).length) return;
-  if (autoplayTimer) return;
-
-  log("Autoplay started ▶️");
-  const hist = lastPayload.history;
-  autoplayIdx = 0;
-
-  autoplayTimer = setInterval(() => {
-    if (!hist[autoplayIdx]) {
-      stopAutoplay();
-      return;
-    }
-    enterPlayback(hist[autoplayIdx]);
-    autoplayIdx += 1;
-    if (autoplayIdx >= hist.length) stopAutoplay();
-  }, 900);
-}
-
-function stopAutoplay() {
-  if (!autoplayTimer) return;
-  clearInterval(autoplayTimer);
-  autoplayTimer = null;
-  log("Autoplay stopped ⏹️");
-}
-
-// ---------- ACK / ALARM ----------
 function updateAckText() {
-  const ackEl = document.getElementById("ackText");
   const ackAt = getAckAt();
-
-  if (!ackAt) {
-    ackEl.textContent = "NOT ACKED";
-    ackEl.style.color = "#ffd6d6";
-    return;
-  }
-
-  const d = new Date(ackAt);
-  ackEl.textContent = `ACK @ ${d.toLocaleTimeString()}`;
-  ackEl.style.color = "#c9ffe8";
+  // optional: you can show this somewhere if needed
 }
 
 function updateAlarmText() {
-  const el = document.getElementById("alarmText");
+  const el = $("alarmText");
+  if (!el) return;
   el.textContent = getMuted() ? "MUTED" : "ARMED";
+  el.style.color = getMuted() ? "#ffe7c2" : "#c9ffe8";
 }
 
+function updateVSATButton() {
+  const btn = $("btnVsat");
+  if (!btn) return;
+  btn.textContent = getVSAT() ? "VSAT: ON" : "VSAT: OFF";
+}
+
+function updateBlackoutButton() {
+  const btn = $("btnBlackout");
+  if (!btn) return;
+  btn.textContent = getBlackout() ? "Blackout: ON" : "Blackout: OFF";
+}
+
+// ======================
+// ALARM (HIGH zones)
+// ======================
 function playBeepOnce() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -567,17 +325,16 @@ function playBeepOnce() {
   } catch {}
 }
 
-function shouldAlarm(decisionFinal) {
-  if (playback.enabled) return false;
-  if (!isYES(decisionFinal)) return false;
+function shouldAlarm(zones) {
+  if (!zones || !zones.length) return false;
   if (getMuted()) return false;
   if (getAckAt()) return false;
-  return true;
+  return zones.some(z => String(z.risk || "").toUpperCase() === "HIGH");
 }
 
 function startAlarm() {
   if (alarmInterval) return;
-  log("ALARM ACTIVE 🔥 (YES decision not acknowledged)");
+  log("ALARM ACTIVE (HIGH risk zone not acknowledged)");
   alarmInterval = setInterval(() => {
     playBeepOnce();
     setTimeout(playBeepOnce, 250);
@@ -589,225 +346,90 @@ function stopAlarm() {
   if (!alarmInterval) return;
   clearInterval(alarmInterval);
   alarmInterval = null;
-  log("Alarm stopped ✅");
+  log("Alarm stopped");
 }
 
-// ---------- VSAT ----------
-function updateVSATButton() {
-  const btn = document.getElementById("btnVsat");
-  btn.textContent = getVSAT() ? "VSAT: ON" : "VSAT: OFF";
+// ======================
+// CACHE
+// ======================
+function saveCache(zones) {
+  try { localStorage.setItem(KEY_CACHE_ZONES, JSON.stringify(zones)); } catch {}
 }
 
-function buildSyncPayload(payload) {
-  return {
-    district: payload.district,
-    updated_at_local: payload.updated_at_local,
-    decision: payload.decision,
-    confidence: payload.confidence,
-    lead_time_hours: payload.lead_time_hours,
-    grid_cells_top5: (payload.grid_cells || [])
-      .slice()
-      .sort((a,b) => Number(b.risk ?? 0) - Number(a.risk ?? 0))
-      .slice(0, 5),
-    sms: String(payload.sms || "").slice(0, 160)
-  };
-}
-
-function updateSyncBytes(payload) {
-  const el = document.getElementById("syncBytes");
-  const vsat = getVSAT();
-  const syncObj = vsat ? buildSyncPayload(payload) : payload;
-  const bytes = new TextEncoder().encode(JSON.stringify(syncObj)).length;
-  el.textContent = `${bytes} bytes (${vsat ? "VSAT" : "FULL"})`;
-  return bytes;
-}
-
-// ---------- OPS CONSOLE ----------
-function updateOpsOverrideText() {
-  const el = document.getElementById("opsOverride");
-  if (!el) return;
-
-  const sim = getSimDecision();
-  if (playback.enabled) {
-    el.textContent = `PLAYBACK @ ${playback.t || "—"}`;
-    el.style.color = "#ffe7c2";
-    return;
-  }
-
-  if (sim) {
-    el.textContent = `SIMULATED: ${sim}`;
-    el.style.color = sim === "YES" ? "#ffd6d6" : "#c9ffe8";
-    return;
-  }
-
-  el.textContent = "LIVE";
-  el.style.color = "#c9ffe8";
-}
-
-async function updateTileCacheCount() {
-  const el = document.getElementById("opsTiles");
-  if (!el) return;
-
-  try {
-    const cache = await caches.open(TILE_CACHE_NAME);
-    const keys = await cache.keys();
-    el.textContent = `${keys.length}`;
-    el.style.color = keys.length > 0 ? "#c9ffe8" : "#ffe7c2";
-  } catch {
-    el.textContent = "—";
-    el.style.color = "#93a4c7";
-  }
-}
-
-function updateFieldReadiness(payload, syncBytes) {
-  const sms = String(payload.sms || "").slice(0, 160);
-  const smsLen = sms.length;
-  const smsEl = document.getElementById("opsSms");
-  if (smsEl) {
-    const ok = smsLen <= 160;
-    smsEl.textContent = ok ? `PASS (${smsLen})` : `FAIL (${smsLen})`;
-    smsEl.style.color = ok ? "#c9ffe8" : "#ffd6d6";
-  }
-
-  const tSec = (syncBytes * 8) / 256000;
-  const vsatEl = document.getElementById("opsVsatTime");
-  if (vsatEl) {
-    vsatEl.textContent = `${tSec.toFixed(2)} sec`;
-    vsatEl.style.color = tSec <= 2 ? "#c9ffe8" : (tSec <= 6 ? "#ffe7c2" : "#ffd6d6");
-  }
-
-  updateOpsOverrideText();
-}
-
-// ---------- BLACKOUT ----------
-function updateBlackoutButton() {
-  const btn = document.getElementById("btnBlackout");
-  if (!btn) return;
-  btn.textContent = getBlackout() ? "Blackout: ON" : "Blackout: OFF";
-}
-
-// ---------- CACHE ----------
-function saveCache(payload) {
-  try { localStorage.setItem(KEY_PAYLOAD, JSON.stringify(payload)); } catch {}
-}
 function loadCache() {
   try {
-    const raw = localStorage.getItem(KEY_PAYLOAD);
+    const raw = localStorage.getItem(KEY_CACHE_ZONES);
     if (!raw) return null;
     return JSON.parse(raw);
   } catch { return null; }
 }
 
-// ---------- DATA ----------
-async function fetchPayload() {
-  const r = await fetch(DATA_URL, { cache: "no-store" });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return await r.json();
+// ======================
+// FETCH (LIVE JSON)
+// ======================
+async function fetchZones() {
+  // ✅ absolute safe URL (prevents path issues)
+  const absUrl = new URL(DATA_URL, window.location.href).toString();
+
+  const res = await fetch(absUrl, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${absUrl}`);
+
+  const text = await res.text(); // ✅ handle partial/invalid updates safely
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error("JSON parse failed (file may be mid-write)");
+  }
+
+  if (!Array.isArray(data)) throw new Error("sensor_data.json is not an array");
+  return data;
 }
 
-// ---------- APPLY ----------
-function getFinalDecision(payload) {
-  if (playback.enabled) return playback.decision;
-  const sim = getSimDecision();
-  if (sim) return sim;
-  return String(payload.decision || "NO").toUpperCase();
+function normalizeZones(raw) {
+  const zones = Array.isArray(raw) ? raw : [];
+
+  // sort by risk then probability (HIGH first)
+  zones.sort((a, b) => {
+    const order = { HIGH: 3, MODERATE: 2, MEDIUM: 2, LOW: 1 };
+    const ra = order[String(a.risk || "").toUpperCase()] || 0;
+    const rb = order[String(b.risk || "").toUpperCase()] || 0;
+    if (rb !== ra) return rb - ra;
+    return Number(b.probability ?? 0) - Number(a.probability ?? 0);
+  });
+
+  return zones;
 }
 
-function getFinalConfidence(payload) {
-  if (playback.enabled) return playback.confidence;
-  const sim = getSimDecision();
-  if (sim) return sim === "YES" ? 0.92 : 0.22;
-  return Number(payload.confidence ?? 0);
-}
+// ======================
+// APPLY
+// ======================
+function applyZones(zones, sourceMsg) {
+  lastZones = zones;
 
-function applyPayload(payload, sourceMsg) {
-  lastPayload = payload;
+  setZoneTable(zones);
+  updateZonesOnMap(zones);
+  setLastUpdate(zones);
 
-  setMetrics(payload);
+  updateFeedHealth(true);
+  lastGoodFetchAt = Date.now();
 
-  const decisionFinal = getFinalDecision(payload);
-  const confFinal = getFinalConfidence(payload);
+  saveCache(zones);
 
-  setBannerDecision(payload, decisionFinal, confFinal);
-  setPlaybackText();
-
-  setChips(payload);
-  setFactors(payload);
-  setTimeline(payload);
-
-  // ✅ NEW GRID UI ONLY
-  setGridTable(payload);
-
-  setSMS(payload);
-
-  const syncBytes = updateSyncBytes(payload);
-  updateFieldReadiness(payload, syncBytes);
-
-  updateTileCacheCount();
-
-  saveCache(payload);
-  updateAckText();
   updateAlarmText();
   updateVSATButton();
   updateBlackoutButton();
+  updateTileCacheCount();
 
-  if (shouldAlarm(decisionFinal)) startAlarm();
+  if (shouldAlarm(zones)) startAlarm();
   else stopAlarm();
 
   log(sourceMsg);
-
-  setTimeout(() => { try { map.invalidateSize(); } catch {} }, 50);
 }
 
-// ---------- REPORT ----------
-function downloadReport(payload) {
-  const dec = getFinalDecision(payload);
-
-  const lines = [];
-  lines.push("SENTINEL-LEWS SITUATION REPORT");
-  lines.push("--------------------------------");
-  lines.push(`District: ${payload.district || "-"}`);
-  lines.push(`Updated:  ${payload.updated_at_local || new Date().toLocaleString()}`);
-  lines.push(`Decision: ${dec}`);
-  lines.push(`Confidence: ${(getFinalConfidence(payload)).toFixed(2)}`);
-  lines.push(`Lead Time (h): ${payload.lead_time_hours ?? "-"}`);
-  lines.push("");
-  lines.push("Summary:");
-  lines.push(payload.summary || "-");
-  lines.push("");
-
-  lines.push("Grid Cells (Top 10 Risk):");
-  const top = (payload.grid_cells || [])
-    .slice()
-    .sort((a,b) => Number(b.risk ?? 0) - Number(a.risk ?? 0))
-    .slice(0, 10);
-
-  top.forEach(g => {
-    lines.push(`- ${g.grid_no}: risk ${Number(g.risk ?? 0).toFixed(2)} | soil ${Number(g.soil_saturation ?? 0).toFixed(2)} | rain ${Number(g.rainfall_mm ?? 0).toFixed(1)} | vib ${g.vibration} @ ${g.lat},${g.lon}`);
-  });
-
-  lines.push("");
-  lines.push("SMS:");
-  lines.push(String(payload.sms || "").slice(0, 160));
-  lines.push("");
-
-  const text = lines.join("\n");
-  const blob = new Blob([text], { type: "text/plain" });
-  const url = URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  a.href = url;
-  a.download = `LEWS_Report_${stamp}.txt`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-
-  log("Downloaded Situation Report ✅");
-}
-
-// ---------- POLLING ----------
+// ======================
+// POLLING
+// ======================
 function startPolling() {
   const ms = getVSAT() ? POLL_VSAT_MS : POLL_NORMAL_MS;
   if (pollTimer) clearInterval(pollTimer);
@@ -819,124 +441,141 @@ function restartPolling() {
   log(`Polling restarted (${getVSAT() ? "VSAT" : "NORMAL"} mode)`);
 }
 
-// ---------- MAIN ----------
+// ======================
+// MAIN REFRESH
+// ======================
 async function refresh() {
+  // BLACKOUT = cache only
   if (getBlackout()) {
     setConn(false, "BLACKOUT (LOCAL)");
     const cached = loadCache();
-    if (cached) applyPayload(cached, "Blackout mode: loaded cache ✅");
-    else log("Blackout mode: no cache available ❌");
+    if (cached) {
+      applyZones(normalizeZones(cached), "Blackout: loaded cached zones");
+    } else {
+      updateFeedHealth(false);
+      log("Blackout: no cache available", false);
+    }
     return;
   }
 
   try {
-    const payload = await fetchPayload();
-    setConn(true);
-    applyPayload(payload, "Loaded ./data.json ✅");
-  } catch {
-    setConn(false);
+    const raw = await fetchZones();
+    const zones = normalizeZones(raw);
+
+    setConn(true, "LIVE FEED OK");
+    applyZones(zones, `Loaded ${zones.length} zones from scripts/sensor_data.json`);
+  } catch (e) {
+    setConn(false, "OFFLINE (CACHE)");
+
+    // keep last zones if available
     const cached = loadCache();
-    if (cached) applyPayload(cached, "Loaded cached payload ✅ (offline)");
-    else log("No cache available ❌");
+    if (cached) {
+      applyZones(normalizeZones(cached), `Fetch failed → using cached zones (${String(e.message)})`);
+    } else {
+      updateFeedHealth(false);
+      log(`Fetch failed (${String(e.message)})`, false);
+    }
   }
 }
 
-// ---------- BOOT ----------
+// ======================
+// REPORT
+// ======================
+function downloadReport(zones) {
+  const lines = [];
+  lines.push("SENTINEL-LEWS ZONE REPORT");
+  lines.push("--------------------------------");
+  lines.push(`Generated: ${new Date().toLocaleString()}`);
+  lines.push("");
+
+  (zones || []).forEach(z => {
+    lines.push(`${z.zone_id} | ${String(z.risk).toUpperCase()} | P=${Number(z.probability ?? 0).toFixed(2)} | lead=${z.lead_time_hours}h | size=${z.zone_size_m}m`);
+    lines.push(`lat=${z.latitude}, lon=${z.longitude} | updated=${formatISO(z.last_updated)} | sender=${z.sender_ip}`);
+    lines.push("");
+  });
+
+  const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  a.href = url;
+  a.download = `LEWS_Zones_${stamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+
+  log("Downloaded report");
+}
+
+// ======================
+// BOOT
+// ======================
 window.addEventListener("load", async () => {
   await registerServiceWorker();
   initMap();
 
-  document.getElementById("btnRefresh").addEventListener("click", refresh);
+  updateAlarmText();
+  updateVSATButton();
+  updateBlackoutButton();
+  updateTileCacheCount();
 
-  document.getElementById("btnCopySms").addEventListener("click", async () => {
-    const txt = document.getElementById("smsText").value || "";
-    try {
-      await navigator.clipboard.writeText(txt);
-      log("SMS copied ✅");
-    } catch {
-      log("Clipboard blocked ❌ (copy manually)");
-    }
+  $("btnRefresh")?.addEventListener("click", refresh);
+
+  $("btnVsat")?.addEventListener("click", () => {
+    setVSAT(!getVSAT());
   });
 
-  document.getElementById("btnAck").addEventListener("click", () => {
-    if (!lastPayload) return;
-    const decisionFinal = getFinalDecision(lastPayload);
-    if (!isYES(decisionFinal)) {
-      log("ACK ignored (decision is NO)");
+  $("btnMute")?.addEventListener("click", () => {
+    const muted = getMuted();
+    setMuted(!muted);
+    $("btnMute").textContent = !muted ? "Unmute" : "Mute";
+
+    if (lastZones && shouldAlarm(lastZones)) startAlarm();
+    else stopAlarm();
+
+    log(!muted ? "Alarm muted" : "Alarm unmuted");
+  });
+
+  $("btnAck")?.addEventListener("click", () => {
+    if (!lastZones || !lastZones.length) {
+      log("ACK ignored (no zones)", false);
       return;
     }
     setAckNow();
     stopAlarm();
-    log("ALERT ACKNOWLEDGED ✅");
+    log("ALERT ACKNOWLEDGED (shown only, no SMS sending)");
   });
 
-  document.getElementById("btnMute").addEventListener("click", () => {
-    const muted = getMuted();
-    setMuted(!muted);
-    document.getElementById("btnMute").textContent = !muted ? "Unmute" : "Mute";
-
-    if (lastPayload && shouldAlarm(getFinalDecision(lastPayload))) startAlarm();
-    else stopAlarm();
-
-    log(!muted ? "Alarm muted ✅" : "Alarm unmuted ✅");
-  });
-
-  document.getElementById("btnReport").addEventListener("click", () => {
-    const payload = lastPayload || loadCache();
-    if (!payload) { log("No payload available for report ❌"); return; }
-    downloadReport(payload);
-  });
-
-  document.getElementById("btnVsat").addEventListener("click", () => {
-    setVSAT(!getVSAT());
-  });
-
-  document.getElementById("btnLive").addEventListener("click", () => {
-    stopAutoplay();
-    exitPlayback();
-  });
-
-  document.getElementById("btnAuto").addEventListener("click", () => {
-    if (autoplayTimer) stopAutoplay();
-    else startAutoplay();
-  });
-
-  document.getElementById("btnBlackout").addEventListener("click", () => {
+  $("btnBlackout")?.addEventListener("click", () => {
     setBlackout(!getBlackout());
     refresh();
-    log(getBlackout() ? "Blackout enabled ✅" : "Blackout disabled ✅");
+    log(getBlackout() ? "Blackout enabled" : "Blackout disabled");
   });
 
-  document.getElementById("btnSimYes").addEventListener("click", () => {
-    setSimDecision("YES");
-    if (lastPayload) applyPayload(lastPayload, "Simulated decision = YES ✅");
-  });
-
-  document.getElementById("btnSimNo").addEventListener("click", () => {
-    setSimDecision("NO");
-    if (lastPayload) applyPayload(lastPayload, "Simulated decision = NO ✅");
-  });
-
-  document.getElementById("btnClearAck").addEventListener("click", () => {
+  $("btnClearAck")?.addEventListener("click", () => {
     clearAck();
-    if (lastPayload) applyPayload(lastPayload, "ACK cleared ✅");
+    log("ACK cleared");
+    if (lastZones && shouldAlarm(lastZones)) startAlarm();
   });
 
-  // Boot from cache
+  $("btnReport")?.addEventListener("click", () => {
+    const zones = lastZones || loadCache();
+    if (!zones) { log("No zones available for report", false); return; }
+    downloadReport(zones);
+  });
+
+  // boot from cache (optional)
   const cached = loadCache();
   if (cached) {
-    setConn(false);
-    applyPayload(cached, "Booted from cache ✅");
+    setConn(false, "OFFLINE (CACHE)");
+    applyZones(normalizeZones(cached), "Booted from cache");
   } else {
-    updateAckText();
-    updateAlarmText();
-    updateVSATButton();
-    updateBlackoutButton();
-    updateOpsOverrideText();
-    log("Booting fresh…");
+    setConn(false, "OFFLINE (CACHE)");
+    updateFeedHealth(false);
+    log("Booting fresh...");
   }
-
-  document.getElementById("btnMute").textContent = getMuted() ? "Unmute" : "Mute";
 
   refresh();
   startPolling();
