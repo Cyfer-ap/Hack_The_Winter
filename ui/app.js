@@ -22,7 +22,6 @@ const TILE_CACHE_NAME = "lews-tiles-v1";
 // ---------- STATE ----------
 let map, baseTileLayer;
 let gridLayer;
-let zonesLayer;
 
 let lastPayload = null;
 
@@ -148,7 +147,6 @@ function initMap() {
   addBaseTiles();
 
   gridLayer = L.layerGroup().addTo(map);
-  zonesLayer = L.layerGroup().addTo(map);
 
   initLegend();
 }
@@ -184,6 +182,24 @@ function makeCellBounds(lat, lon, cellSizeM = 30) {
   ];
 }
 
+function makeTooltipHTML(cell) {
+  const col = riskColor(cell.risk);
+  return `
+    <div>
+      <div style="margin-bottom:6px">
+        <b>Grid ${cell.grid_no || "-"}</b>
+      </div>
+      <div>Risk: <b style="color:${col}">${Number(cell.risk ?? 0).toFixed(2)}</b></div>
+      <div>Soil saturation: <b>${Number(cell.soil_saturation ?? 0).toFixed(2)}</b></div>
+      <div>Rainfall: <b>${Number(cell.rainfall_mm ?? 0).toFixed(1)} mm</b></div>
+      <div>Vibration: <b>${Number(cell.vibration ?? 0)} / 10</b></div>
+      <div style="margin-top:6px;color:#93a4c7">
+        ${cell.lat}, ${cell.lon}
+      </div>
+    </div>
+  `;
+}
+
 function updateGridOnMap(gridCells) {
   gridLayer.clearLayers();
 
@@ -200,46 +216,23 @@ function updateGridOnMap(gridCells) {
       fillOpacity: 0.45
     });
 
-    rect.bindPopup(`
-      <b>Grid ${cell.grid_no || "-"}</b><br/>
-      Risk: <b style="color:${col}">${Number(cell.risk ?? 0).toFixed(2)}</b><br/>
-      Soil saturation: ${Number(cell.soil_saturation ?? 0).toFixed(2)}<br/>
-      Rainfall: ${Number(cell.rainfall_mm ?? 0).toFixed(1)} mm<br/>
-      Vibration: ${Number(cell.vibration ?? 0)} / 10<br/>
-      Lat,Lon: ${cell.lat}, ${cell.lon}
-    `);
+    // ✅ HOVER POPUP (no click)
+    rect.bindTooltip(makeTooltipHTML(cell), {
+      sticky: true,
+      direction: "top",
+      opacity: 0.98,
+      className: "gridTip"
+    });
 
-    rect.on("mouseover", () => rect.setStyle({ weight: 2, fillOpacity: 0.70 }));
+    rect.on("mouseover", () => rect.setStyle({ weight: 2, fillOpacity: 0.72 }));
     rect.on("mouseout", () => rect.setStyle({ weight: 1, fillOpacity: 0.45 }));
 
+    // Optional: focus map when clicked
+    rect.on("click", () => {
+      map.setView([cell.lat, cell.lon], 18);
+    });
+
     rect.addTo(gridLayer);
-  });
-}
-
-// ---------- ZONES (optional, still supported) ----------
-function zoneStyle(action) {
-  const a = String(action || "SAFE").toUpperCase();
-  if (a === "EVACUATE") return { color: "#ff4d4f", fillColor: "#ff4d4f", fillOpacity: 0.12, weight: 2 };
-  if (a === "WATCH") return { color: "#ffb020", fillColor: "#ffb020", fillOpacity: 0.12, weight: 2 };
-  return { color: "#26d07c", fillColor: "#26d07c", fillOpacity: 0.10, weight: 2 };
-}
-
-function updateZonesOnMap(zones) {
-  zonesLayer.clearLayers();
-
-  (zones || []).forEach(z => {
-    if (z.lat == null || z.lon == null) return;
-
-    const style = zoneStyle(z.action);
-    const radius = Number(z.radius_m ?? 180);
-
-    const circle = L.circle([z.lat, z.lon], { radius, ...style });
-
-    circle.bindPopup(
-      `<b>${z.name}</b><br/>Action: <b>${String(z.action).toUpperCase()}</b><br/>Shelter: ${z.shelter || "-"}`
-    );
-
-    circle.addTo(zonesLayer);
   });
 }
 
@@ -342,7 +335,6 @@ function setGridTable(payload) {
     return;
   }
 
-  // Sort: highest risk first
   grid = [...grid].sort((a,b) => Number(b.risk ?? 0) - Number(a.risk ?? 0));
 
   grid.slice(0, 25).forEach((g, idx) => {
@@ -369,51 +361,6 @@ function setGridTable(payload) {
   });
 
   updateGridOnMap(payload.grid_cells);
-}
-
-function setZonesPanel(payload) {
-  const list = document.getElementById("zoneList");
-  list.innerHTML = "";
-
-  const zones = payload.evacuation_zones || [];
-  if (!zones.length) {
-    list.innerHTML = `<div class="muted">No evacuation zones</div>`;
-    updateZonesOnMap([]);
-    return;
-  }
-
-  zones.forEach(z => {
-    const action = String(z.action || "SAFE").toUpperCase();
-    const actionClass =
-      action === "EVACUATE" ? "evac" :
-      action === "WATCH" ? "watch" : "safe";
-
-    const row = document.createElement("div");
-    row.className = "zoneRow";
-
-    row.innerHTML = `
-      <div class="zoneLeft">
-        <div class="zoneName">${z.name}</div>
-        <div class="zoneMeta">
-          Action: <b>${action}</b> • ETA: <b>${z.eta_minutes ?? 0} min</b><br/>
-          Shelter: <b>${z.shelter || "-"}</b> • Pop: <b>${z.population_est ?? "-"}</b>
-        </div>
-        <div class="zoneMeta" style="color:#93a4c7">${z.reason || ""}</div>
-      </div>
-      <div class="zoneBtns">
-        <div class="zoneAction ${actionClass}">${action}</div>
-        <button class="btn small secondary">Focus</button>
-      </div>
-    `;
-
-    row.querySelector("button").addEventListener("click", () => {
-      if (z.lat != null && z.lon != null) map.setView([z.lat, z.lon], 17);
-    });
-
-    list.appendChild(row);
-  });
-
-  updateZonesOnMap(zones);
 }
 
 function setSMS(payload) {
@@ -713,7 +660,6 @@ async function updateTileCacheCount() {
 }
 
 function updateFieldReadiness(payload, syncBytes) {
-  // SMS compliance
   const sms = String(payload.sms || "").slice(0, 160);
   const smsLen = sms.length;
   const smsEl = document.getElementById("opsSms");
@@ -723,7 +669,6 @@ function updateFieldReadiness(payload, syncBytes) {
     smsEl.style.color = ok ? "#c9ffe8" : "#ffd6d6";
   }
 
-  // VSAT time @256kbps
   const tSec = (syncBytes * 8) / 256000;
   const vsatEl = document.getElementById("opsVsatTime");
   if (vsatEl) {
@@ -789,9 +734,8 @@ function applyPayload(payload, sourceMsg) {
   setChips(payload);
   setFactors(payload);
   setTimeline(payload);
-  setZonesPanel(payload);
 
-  // ✅ NEW GRID TABLE + MAP
+  // ✅ NEW GRID UI ONLY
   setGridTable(payload);
 
   setSMS(payload);

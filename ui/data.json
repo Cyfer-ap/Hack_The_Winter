@@ -4,7 +4,7 @@
   "decision": "YES",
   "confidence": 0.88,
   "lead_time_hours": 6,
-  "summary": "Multiple high-risk grid cells detected near ridge + drain slope. Recommended WATCH/EVACUATE at critical clusters.",
+  "summary": "High-risk grid clusters detected near ridge + drain slope. Focus on red cells with risk > 0.70.",
   "sms": "ALERT: Landslide RISK=YES (conf 0.88). Avoid Ridge Road & nearby drain slopes. Prepare evacuation. Follow District Control Room updates.",
   "factors": [
     { "name": "Soil Saturation", "value": "0.82", "level": "HIGH" },
@@ -19,30 +19,6 @@
     { "t": "19:00", "decision": "YES", "confidence": 0.72 },
     { "t": "20:00", "decision": "YES", "confidence": 0.84 },
     { "t": "21:00", "decision": "YES", "confidence": 0.88 }
-  ],
-  "evacuation_zones": [
-    {
-      "name": "Ridge Road Cluster",
-      "action": "EVACUATE",
-      "eta_minutes": 18,
-      "shelter": "Govt School Shelter A",
-      "population_est": 520,
-      "reason": "High risk grid cluster around ridge curve",
-      "lat": 31.1042,
-      "lon": 77.1738,
-      "radius_m": 220
-    },
-    {
-      "name": "Drain Slope Watch",
-      "action": "WATCH",
-      "eta_minutes": 25,
-      "shelter": "Community Hall B",
-      "population_est": 410,
-      "reason": "Moderate risk cells around drainage line",
-      "lat": 31.1034,
-      "lon": 77.1719,
-      "radius_m": 260
-    }
   ],
   "grid_cells": [
     { "grid_no": "G-01", "lat": 31.10390, "lon": 77.17290, "soil_saturation": 0.61, "rainfall_mm": 76.2, "vibration": 5, "risk": 0.42 },

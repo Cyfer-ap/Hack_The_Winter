@@ -1,4 +1,4 @@
-const APP_CACHE = "lews-app-v3";
+const APP_CACHE = "lews-app-v4";
 const TILE_CACHE = "lews-tiles-v1";
 
 const APP_ASSETS = [

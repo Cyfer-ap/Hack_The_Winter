@@ -475,3 +475,24 @@ body{
 
 .logCard{grid-column:1/3}
 .muted{color:var(--muted)}
+
+
+/* ✅ GRID HOVER TOOLTIP */
+.leaflet-tooltip.gridTip{
+  background:rgba(14,23,48,0.95);
+  border:1px solid #223152;
+  color:#cfe0ff;
+  border-radius:12px;
+  padding:10px 12px;
+  font-size:12px;
+  font-weight:800;
+  box-shadow:0 12px 28px rgba(0,0,0,0.35);
+}
+
+.leaflet-tooltip.gridTip b{
+  color:#e7eeff;
+}
+
+.leaflet-tooltip.gridTip:before{
+  border-top-color:rgba(14,23,48,0.95) !important;
+}
