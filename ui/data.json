@@ -1,0 +1,68 @@
+{
+  "district": "Shimla",
+  "updated_at_local": "2026-01-22 21:40 IST",
+  "decision": "YES",
+  "confidence": 0.88,
+  "lead_time_hours": 6,
+  "summary": "Multiple high-risk grid cells detected near ridge + drain slope. Recommended WATCH/EVACUATE at critical clusters.",
+  "sms": "ALERT: Landslide RISK=YES (conf 0.88). Avoid Ridge Road & nearby drain slopes. Prepare evacuation. Follow District Control Room updates.",
+  "factors": [
+    { "name": "Soil Saturation", "value": "0.82", "level": "HIGH" },
+    { "name": "Rainfall (mm)", "value": "112.6", "level": "HIGH" },
+    { "name": "Vibration", "value": "7/10", "level": "MEDIUM" },
+    { "name": "Slope Instability", "value": "HIGH", "level": "HIGH" }
+  ],
+  "history": [
+    { "t": "16:00", "decision": "NO", "confidence": 0.22 },
+    { "t": "17:00", "decision": "NO", "confidence": 0.30 },
+    { "t": "18:00", "decision": "YES", "confidence": 0.61 },
+    { "t": "19:00", "decision": "YES", "confidence": 0.72 },
+    { "t": "20:00", "decision": "YES", "confidence": 0.84 },
+    { "t": "21:00", "decision": "YES", "confidence": 0.88 }
+  ],
+  "evacuation_zones": [
+    {
+      "name": "Ridge Road Cluster",
+      "action": "EVACUATE",
+      "eta_minutes": 18,
+      "shelter": "Govt School Shelter A",
+      "population_est": 520,
+      "reason": "High risk grid cluster around ridge curve",
+      "lat": 31.1042,
+      "lon": 77.1738,
+      "radius_m": 220
+    },
+    {
+      "name": "Drain Slope Watch",
+      "action": "WATCH",
+      "eta_minutes": 25,
+      "shelter": "Community Hall B",
+      "population_est": 410,
+      "reason": "Moderate risk cells around drainage line",
+      "lat": 31.1034,
+      "lon": 77.1719,
+      "radius_m": 260
+    }
+  ],
+  "grid_cells": [
+    { "grid_no": "G-01", "lat": 31.10390, "lon": 77.17290, "soil_saturation": 0.61, "rainfall_mm": 76.2, "vibration": 5, "risk": 0.42 },
+    { "grid_no": "G-02", "lat": 31.10390, "lon": 77.17320, "soil_saturation": 0.68, "rainfall_mm": 84.9, "vibration": 6, "risk": 0.55 },
+    { "grid_no": "G-03", "lat": 31.10390, "lon": 77.17350, "soil_saturation": 0.74, "rainfall_mm": 92.1, "vibration": 7, "risk": 0.71 },
+
+    { "grid_no": "G-04", "lat": 31.10410, "lon": 77.17290, "soil_saturation": 0.66, "rainfall_mm": 79.4, "vibration": 6, "risk": 0.50 },
+    { "grid_no": "G-05", "lat": 31.10410, "lon": 77.17320, "soil_saturation": 0.81, "rainfall_mm": 106.2, "vibration": 8, "risk": 0.86 },
+    { "grid_no": "G-06", "lat": 31.10410, "lon": 77.17350, "soil_saturation": 0.85, "rainfall_mm": 118.8, "vibration": 9, "risk": 0.93 },
+
+    { "grid_no": "G-07", "lat": 31.10430, "lon": 77.17290, "soil_saturation": 0.58, "rainfall_mm": 73.0, "vibration": 4, "risk": 0.36 },
+    { "grid_no": "G-08", "lat": 31.10430, "lon": 77.17320, "soil_saturation": 0.77, "rainfall_mm": 101.7, "vibration": 7, "risk": 0.79 },
+    { "grid_no": "G-09", "lat": 31.10430, "lon": 77.17350, "soil_saturation": 0.83, "rainfall_mm": 114.2, "vibration": 8, "risk": 0.90 },
+
+    { "grid_no": "G-10", "lat": 31.10360, "lon": 77.17260, "soil_saturation": 0.44, "rainfall_mm": 55.5, "vibration": 3, "risk": 0.22 },
+    { "grid_no": "G-11", "lat": 31.10360, "lon": 77.17290, "soil_saturation": 0.59, "rainfall_mm": 69.4, "vibration": 5, "risk": 0.39 },
+    { "grid_no": "G-12", "lat": 31.10360, "lon": 77.17320, "soil_saturation": 0.65, "rainfall_mm": 80.0, "vibration": 6, "risk": 0.48 },
+
+    { "grid_no": "G-13", "lat": 31.10450, "lon": 77.17260, "soil_saturation": 0.63, "rainfall_mm": 77.1, "vibration": 5, "risk": 0.45 },
+    { "grid_no": "G-14", "lat": 31.10450, "lon": 77.17290, "soil_saturation": 0.70, "rainfall_mm": 88.7, "vibration": 6, "risk": 0.60 },
+    { "grid_no": "G-15", "lat": 31.10450, "lon": 77.17320, "soil_saturation": 0.78, "rainfall_mm": 98.4, "vibration": 7, "risk": 0.74 }
+  ]
+}
