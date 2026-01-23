@@ -19,7 +19,7 @@ This project provides an interactive interface to:
 
 ## Tech Stack
 
-- Frontend: JavaScript / npm
+- Frontend: leaflet / npm
 - Backend / Services: Python / pip
 - Mapping and visualization: client-side map components integrated into the UI
 
